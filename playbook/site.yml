@@ -1,24 +1,28 @@
 ---
 - name: Install Clickhouse
   hosts: clickhouse
+  tags: clickhouse
   handlers:
     - name: Start clickhouse service
       become: true
       ansible.builtin.service:
         name: clickhouse-server
         state: restarted
-  tasks:
-    - block:
+  pre_tasks:
+    - name: Download Clickhouse distrib
+      block:
         - name: Get clickhouse distrib
           ansible.builtin.get_url:
             url: "https://packages.clickhouse.com/rpm/stable/{{ item }}-{{ clickhouse_version }}.noarch.rpm"
             dest: "./{{ item }}-{{ clickhouse_version }}.rpm"
+            mode: 644
           with_items: "{{ clickhouse_packages }}"
       rescue:
         - name: Get clickhouse distrib
           ansible.builtin.get_url:
             url: "https://packages.clickhouse.com/rpm/stable/clickhouse-common-static-{{ clickhouse_version }}.x86_64.rpm"
             dest: "./clickhouse-common-static-{{ clickhouse_version }}.rpm"
+            mode: 644
     - name: Install clickhouse packages
       become: true
       ansible.builtin.yum:
@@ -27,8 +31,61 @@
           - clickhouse-client-{{ clickhouse_version }}.rpm
           - clickhouse-server-{{ clickhouse_version }}.rpm
       notify: Start clickhouse service
+  tasks:
     - name: Create database
       ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
       register: create_db
       failed_when: create_db.rc != 0 and create_db.rc !=82
       changed_when: create_db.rc == 0
+
+- name: Get and Install Vector
+  hosts: clickhouse
+  tags: vector
+  tasks:
+    - name: Get and extract archive
+      ansible.builtin.unarchive:
+        src: "https://packages.timber.io/vector/{{ vector_version }}/vector-{{ vector_version }}-x86_64-unknown-linux-musl.tar.gz"
+        dest: "/tmp"
+        remote_src: true
+    - name: Install Vector
+      block:
+        - name: User create
+          ansible.builtin.user:
+            name: vector
+        - name: Create a working directory
+          ansible.builtin.file:
+            path: "/var/lib/vector"
+            state: directory
+            mode: '0755'
+            owner: vector
+            group: vector
+        - name: Create a config directory
+          ansible.builtin.file:
+            path: "/etc/vector"
+            state: directory
+            mode: '0755'
+        - name: Program Copying
+          ansible.builtin.copy:
+            src: "/tmp/vector-x86_64-unknown-linux-musl/bin/vector"
+            dest: "/usr/bin/vector"
+            mode: 0755
+            remote_src: true
+        - name: Config Copying
+          ansible.builtin.copy:
+            src: "/tmp/vector-x86_64-unknown-linux-musl/config/vector.toml"
+            dest: "/etc/vector/vector.toml"
+            mode: 0755
+            remote_src: true
+        - name: Service file Copying
+          ansible.builtin.copy:
+            src: "/tmp/vector-x86_64-unknown-linux-musl/etc/systemd/vector.service"
+            dest: "/etc/systemd/system/vector.service"
+            mode: 0755
+            remote_src: true
+      notify: Start Vector service
+  handlers:
+    - name: Start Vector service
+      become: true
+      ansible.builtin.service:
+        name: vector
+        state: restarted
